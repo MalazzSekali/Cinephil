@@ -35,6 +35,17 @@ function jikanResult(item: any, category: "anime" | "manga" | "manhwa"): SearchR
   };
 }
 
+function kitsuResult(item: any, category: "anime" | "manga" | "manhwa"): SearchResult {
+  const attributes = item.attributes ?? {};
+  return {
+    id: `kitsu:${category}:${item.id}`, category,
+    title: attributes.titles?.en ?? attributes.titles?.en_jp ?? attributes.canonicalTitle ?? "Untitled",
+    description: attributes.synopsis ?? "", year: (attributes.startDate ?? "").slice(0, 4),
+    poster: attributes.posterImage?.large ?? attributes.posterImage?.original ?? null,
+    progress_total: attributes.episodeCount ?? attributes.chapterCount ?? null,
+  };
+}
+
 async function getJson(url: string) {
   const response = await fetch(url, { next: { revalidate: 3600 } });
   if (!response.ok) throw new Error(`Search provider returned ${response.status}`);
@@ -65,14 +76,24 @@ export async function GET(req: Request) {
     }
   } else if (["all", "movie"].includes(type)) {
     // Wikipedia's public search provides a useful film fallback without requiring an API key.
-    const wikiQuery = wikiGenres[q.toLowerCase()] ? `incategory:"${wikiGenres[q.toLowerCase()]}"` : `${q} film`;
-    tasks.push(getJson(`https://en.wikipedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent(wikiQuery)}&gsrlimit=12&prop=pageimages%7Cextracts&piprop=thumbnail&pithumbsize=500&exintro=1&explaintext=1&format=json`)
-      .then(data => Object.values(data.query?.pages ?? {}).map((page: any) => ({
+    tasks.push((async () => {
+      let data: any;
+      const wikiGenre = wikiGenres[q.toLowerCase()];
+      if (wikiGenre) {
+        const categoryData = await getJson(`https://en.wikipedia.org/w/api.php?action=query&list=categorymembers&cmtitle=Category:${encodeURIComponent(wikiGenre.replaceAll(" ", "_"))}&cmtype=page&cmlimit=15&format=json`);
+        const titles = (categoryData.query?.categorymembers ?? []).map((page: any) => page.title).join("|");
+        if (!titles) return [];
+        data = await getJson(`https://en.wikipedia.org/w/api.php?action=query&generator=pages&titles=${encodeURIComponent(titles)}&prop=pageimages%7Cextracts&piprop=thumbnail&pithumbsize=500&exintro=1&explaintext=1&format=json`);
+      } else {
+        data = await getJson(`https://en.wikipedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent(`${q} film`)}&gsrlimit=12&prop=pageimages%7Cextracts&piprop=thumbnail&pithumbsize=500&exintro=1&explaintext=1&format=json`);
+      }
+      return Object.values(data.query?.pages ?? {}).map((page: any) => ({
         id: `wikipedia:${page.pageid}`, category: "movie" as const, title: page.title,
         description: page.extract ?? "", year: (page.extract?.match(/\b(?:19|20)\d{2}\b/) ?? [""])[0],
         poster: page.thumbnail?.source ?? null, progress_total: null,
         external_url: `https://en.wikipedia.org/?curid=${page.pageid}`,
-      }))).catch(() => []));
+      }));
+    })().catch(() => []));
   }
 
   if (!apiKey && ["all", "tv"].includes(type)) {
@@ -87,11 +108,18 @@ export async function GET(req: Request) {
 
   if (["all", "anime", "manga", "manhwa"].includes(type)) {
     const mediaType = type === "manhwa" ? "manga" : type === "all" ? "anime" : type;
-    tasks.push(getJson(`https://api.jikan.moe/v4/${mediaType}?q=${encodeURIComponent(q)}&limit=12`)
-      .then(data => (data.data ?? [])
-        .filter((item: any) => type !== "manhwa" || item.type === "Manhwa")
-        .slice(0, 12).map((item: any) => jikanResult(item, type === "all" ? "anime" : type as "anime" | "manga" | "manhwa")))
-      .catch(() => []));
+    const resultCategory = type === "all" ? "anime" : type as "anime" | "manga" | "manhwa";
+    tasks.push((async () => {
+      try {
+        const data = await getJson(`https://api.jikan.moe/v4/${mediaType}?q=${encodeURIComponent(q)}&limit=12`);
+        const jikanResults = (data.data ?? []).filter((item: any) => type !== "manhwa" || item.type === "Manhwa")
+          .slice(0, 12).map((item: any) => jikanResult(item, resultCategory));
+        if (jikanResults.length) return jikanResults;
+      } catch { /* Use Kitsu as a fallback when Jikan is unavailable or rate-limited. */ }
+      const data = await getJson(`https://kitsu.io/api/edge/${mediaType}?filter[text]=${encodeURIComponent(q)}&page[limit]=12`);
+      return (data.data ?? []).filter((item: any) => type !== "manhwa" || item.attributes?.subtype === "manhwa")
+        .slice(0, 12).map((item: any) => kitsuResult(item, resultCategory));
+    })().catch(() => []));
   }
 
   const results = (await Promise.all(tasks)).flat();
