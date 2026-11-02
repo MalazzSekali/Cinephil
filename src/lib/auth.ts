@@ -8,9 +8,10 @@ const digest = (v: string) => createHash("sha256").update(v).digest("hex");
 export async function currentUser() {
   const token = (await cookies()).get(COOKIE)?.value;
   if (!token) return null;
-  const { data } = await db().from("user_sessions").select("user_id, expires_at, users(id, username, display_name)").eq("token_hash", digest(token)).maybeSingle();
-  if (!data || new Date(data.expires_at) < new Date()) return null;
-  return (data as any).users as {id:string; username:string; display_name:string};
+  const { data: session } = await db().from("user_sessions").select("user_id, expires_at").eq("token_hash", digest(token)).maybeSingle();
+  if (!session || new Date(session.expires_at) < new Date()) return null;
+  const { data } = await db().from("users").select("id, username, display_name").eq("id", session.user_id).maybeSingle();
+  return data;
 }
 export async function startSession(userId: string) {
   const token = randomBytes(32).toString("base64url");
