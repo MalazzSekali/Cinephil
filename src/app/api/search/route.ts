@@ -123,7 +123,9 @@ export async function GET(req: Request) {
       if (!response.ok) throw new Error(`AniList returned ${response.status}`);
       const data = await response.json();
       if (data.errors?.length) throw new Error("AniList search failed");
-      return (data.data?.Page?.media ?? []).map((item: any) => ({
+      const media = data.data?.Page?.media ?? [];
+      if (media.length === 0) throw new Error("AniList returned no results");
+      return media.map((item: any) => ({
         id: `anilist:${mediaType.toLowerCase()}:${item.id}`, category,
         title: item.title?.english ?? item.title?.romaji ?? "Untitled",
         description: (item.description ?? "").replace(/~![\s\S]*?!~/g, "[spoiler]").replace(/<[^>]*>/g, ""),
@@ -132,6 +134,11 @@ export async function GET(req: Request) {
         progress_total: item.episodes ?? item.chapters ?? null,
         external_url: item.siteUrl ?? null,
       }));
+    }).catch(async () => {
+      const fallbackType = mediaType === "ANIME" ? "anime" : "manga";
+      const data = await getJson(`https://kitsu.io/api/edge/${fallbackType}?filter[text]=${encodeURIComponent(q)}&page[limit]=12`);
+      return (data.data ?? []).filter((item: any) => type !== "manhwa" || item.attributes?.subtype === "manhwa")
+        .slice(0, 12).map((item: any) => kitsuResult(item, category));
     }).catch(() => []));
   }
 
