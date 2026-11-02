@@ -10,11 +10,11 @@ Cinephil is a dark, responsive entertainment tracker for movies, television, ani
 
 ## Local setup
 1. Create a Supabase project and run `supabase/migrations/202611020001_cinephil.sql` in its SQL editor.
-2. Copy `.env.example` to `.env.local` and fill in the server-only Supabase URL and service role key, a TMDB API key, and a random `SESSION_SECRET` (at least 32 characters).
+2. Copy `.env.example` to `.env.local` and fill in the server-only Supabase URL and secret API key, a TMDB API key, and a random `SESSION_SECRET` (at least 32 characters).
 3. Install dependencies with `npm install`.
 4. Run `npm run dev` and open http://localhost:3000.
 
-The service role key must never use a `NEXT_PUBLIC_` name. Do not commit `.env.local`.
+The Supabase secret key must never use a `NEXT_PUBLIC_` name. Do not commit `.env.local`.
 
 ## Features
 - Account registration and sign-in with username and password; no email or phone number.
@@ -31,7 +31,7 @@ The service role key must never use a `NEXT_PUBLIC_` name. Do not commit `.env.l
 | --- | --- |
 | `NEXT_PUBLIC_APP_URL` | Canonical app URL |
 | `SUPABASE_URL` | Supabase project endpoint (server use) |
-| `SUPABASE_SERVICE_ROLE_KEY` | Server-only database access |
+| `SUPABASE_SECRET_KEY` | Server-only database access; use the `sb_secret_...` key |
 | `TMDB_API_KEY` | TMDB v3 API key (server use) |
 | `SESSION_SECRET` | Reserved for signing/rotation integrations; set to a high-entropy value |
 
