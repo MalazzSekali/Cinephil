@@ -16,7 +16,6 @@ const tmdbGenres: Record<string, string> = {
   horror: "27", music: "10402", mystery: "9648", romance: "10749", "science fiction": "878",
   thriller: "53", war: "10752", western: "37",
 };
-const wikiGenres: Record<string, string> = { romance: "Romance films", comedy: "Comedy films", horror: "Horror films", drama: "Drama films", action: "Action films", thriller: "Thriller films", fantasy: "Fantasy films", "science fiction": "Science fiction films", adventure: "Adventure films" };
 
 function tmdbResult(item: any, kind: "movie" | "tv"): SearchResult {
   return {
@@ -77,16 +76,8 @@ export async function GET(req: Request) {
   } else if (["all", "movie"].includes(type)) {
     // Wikipedia's public search provides a useful film fallback without requiring an API key.
     tasks.push((async () => {
-      let data: any;
-      const wikiGenre = wikiGenres[q.toLowerCase()];
-      if (wikiGenre) {
-        const categoryData = await getJson(`https://en.wikipedia.org/w/api.php?action=query&list=categorymembers&cmtitle=Category:${encodeURIComponent(wikiGenre.replaceAll(" ", "_"))}&cmtype=page&cmlimit=15&format=json`);
-        const titles = (categoryData.query?.categorymembers ?? []).map((page: any) => page.title).join("|");
-        if (titles) data = await getJson(`https://en.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(titles)}&prop=pageimages%7Cextracts&piprop=thumbnail&pithumbsize=500&exintro=1&explaintext=1&format=json`);
-        else data = await getJson(`https://en.wikipedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent(`${q} film`)}&gsrlimit=12&prop=pageimages%7Cextracts&piprop=thumbnail&pithumbsize=500&exintro=1&explaintext=1&format=json`);
-      } else {
-        data = await getJson(`https://en.wikipedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent(`${q} film`)}&gsrlimit=12&prop=pageimages%7Cextracts&piprop=thumbnail&pithumbsize=500&exintro=1&explaintext=1&format=json`);
-      }
+      const wikiQuery = `${q} film`;
+      const data = await getJson(`https://en.wikipedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent(wikiQuery)}&gsrlimit=12&prop=pageimages%7Cextracts&piprop=thumbnail&pithumbsize=500&exintro=1&explaintext=1&format=json`);
       return Object.values(data.query?.pages ?? {}).map((page: any) => ({
         id: `wikipedia:${page.pageid}`, category: "movie" as const, title: page.title,
         description: page.extract ?? "", year: (page.extract?.match(/\b(?:19|20)\d{2}\b/) ?? [""])[0],
