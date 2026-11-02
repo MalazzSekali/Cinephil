@@ -66,11 +66,14 @@ export async function GET(req: Request) {
 
   if (apiKey && ["all", "movie", "tv"].includes(type)) {
     const kinds: Array<"movie" | "tv"> = type === "all" ? ["movie", "tv"] : [type as "movie" | "tv"];
+    const bearerToken = apiKey.length > 50;
     for (const kind of kinds) {
       const endpoint = genreId
         ? `discover/${kind}?with_genres=${genreId}&sort_by=popularity.desc&include_adult=false`
         : `search/${kind}?query=${encodeURIComponent(q)}&include_adult=false`;
-      tasks.push(getJson(`https://api.themoviedb.org/3/${endpoint}&api_key=${encodeURIComponent(apiKey)}`)
+      const url = `https://api.themoviedb.org/3/${endpoint}${bearerToken ? "" : `&api_key=${encodeURIComponent(apiKey)}`}`;
+      tasks.push(fetch(url, { headers: bearerToken ? { Authorization: `Bearer ${apiKey}`, accept: "application/json" } : { accept: "application/json" }, next: { revalidate: 3600 } })
+        .then(async response => { if (!response.ok) throw new Error(`TMDB returned ${response.status}`); return response.json(); })
         .then(data => (data.results ?? []).slice(0, 12).map((item: any) => tmdbResult(item, kind)))
         .catch(() => []));
     }
