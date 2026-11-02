@@ -18,6 +18,7 @@ The service role key must never use a `NEXT_PUBLIC_` name. Do not commit `.env.l
 
 ## Features
 - Account registration and sign-in with username and password; no email or phone number.
+- Change password with current-password verification; active sessions are revoked after a successful change.
 - Password hashes use bcrypt (12 rounds). Sessions use random opaque tokens; only SHA-256 token hashes are stored in the database.
 - Cookies are HttpOnly, SameSite=Lax, and Secure in production. Sessions expire after 30 days and logout revokes the server record.
 - Login attempts are throttled in PostgreSQL by username and client IP (10 per 15 minutes).
@@ -43,4 +44,4 @@ Import this GitHub repository into Vercel, set the environment variables above f
 - `GET|POST|PATCH|DELETE /api/collection`
 
 ## Scope notes
-The initial app supports private collections, per-title status, progress increments, ratings/reviews fields in the API/database, and activity events. Password change, editable public profiles, favorites management, pagination, and a dedicated title-detail page are follow-up work. TMDB API access requires a key; Jikan is public and rate-limited upstream.
+The initial app supports private collections, per-title status, progress increments, rating/review and favorite fields, password changes, and activity events. Editable public profiles, pagination, and a dedicated title-detail page are follow-up work. TMDB API access requires a key; Jikan is public and rate-limited upstream.
