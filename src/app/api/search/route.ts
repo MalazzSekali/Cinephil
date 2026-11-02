@@ -104,19 +104,35 @@ export async function GET(req: Request) {
   }
 
   if (["all", "anime", "manga", "manhwa"].includes(type)) {
-    const mediaType = type === "manhwa" ? "manga" : type === "all" ? "anime" : type;
-    const resultCategory = type === "all" ? "anime" : type as "anime" | "manga" | "manhwa";
-    tasks.push((async () => {
-      try {
-        const data = await getJson(`https://api.jikan.moe/v4/${mediaType}?q=${encodeURIComponent(q)}&limit=12`);
-        const jikanResults = (data.data ?? []).filter((item: any) => type !== "manhwa" || item.type === "Manhwa")
-          .slice(0, 12).map((item: any) => jikanResult(item, resultCategory));
-        if (jikanResults.length) return jikanResults;
-      } catch { /* Use Kitsu as a fallback when Jikan is unavailable or rate-limited. */ }
-      const data = await getJson(`https://kitsu.io/api/edge/${mediaType}?filter[text]=${encodeURIComponent(q)}&page[limit]=12`);
-      return (data.data ?? []).filter((item: any) => type !== "manhwa" || item.attributes?.subtype === "manhwa")
-        .slice(0, 12).map((item: any) => kitsuResult(item, resultCategory));
-    })().catch(() => []));
+    const mediaType = type === "manga" || type === "manhwa" ? "MANGA" : "ANIME";
+    const category = type === "all" ? "anime" : type as "anime" | "manga" | "manhwa";
+    const country = type === "manhwa" ? "KR" : null;
+    const query = `query ($search: String!, $type: MediaType!, $country: CountryCode) {
+      Page(page: 1, perPage: 15) {
+        media(search: $search, type: $type, countryOfOrigin: $country, isAdult: false, sort: SEARCH_MATCH) {
+          id title { romaji english } description(asHtml: false) startDate { year }
+          coverImage { large } episodes chapters volumes countryOfOrigin siteUrl
+        }
+      }
+    }`;
+    tasks.push(fetch("https://graphql.anilist.co", {
+      method: "POST", headers: { "content-type": "application/json", accept: "application/json" },
+      body: JSON.stringify({ query, variables: { search: q, type: mediaType, country } }),
+      next: { revalidate: 3600 },
+    }).then(async response => {
+      if (!response.ok) throw new Error(`AniList returned ${response.status}`);
+      const data = await response.json();
+      if (data.errors?.length) throw new Error("AniList search failed");
+      return (data.data?.Page?.media ?? []).map((item: any) => ({
+        id: `anilist:${mediaType.toLowerCase()}:${item.id}`, category,
+        title: item.title?.english ?? item.title?.romaji ?? "Untitled",
+        description: (item.description ?? "").replace(/~!.*?!~/gs, "[spoiler]").replace(/<[^>]*>/g, ""),
+        year: item.startDate?.year ? String(item.startDate.year) : "",
+        poster: item.coverImage?.large ?? null,
+        progress_total: item.episodes ?? item.chapters ?? null,
+        external_url: item.siteUrl ?? null,
+      }));
+    }).catch(() => []));
   }
 
   const results = (await Promise.all(tasks)).flat();
