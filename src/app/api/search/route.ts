@@ -126,7 +126,7 @@ export async function GET(req: Request) {
       return (data.data?.Page?.media ?? []).map((item: any) => ({
         id: `anilist:${mediaType.toLowerCase()}:${item.id}`, category,
         title: item.title?.english ?? item.title?.romaji ?? "Untitled",
-        description: (item.description ?? "").replace(/~!.*?!~/gs, "[spoiler]").replace(/<[^>]*>/g, ""),
+        description: (item.description ?? "").replace(/~![\s\S]*?!~/g, "[spoiler]").replace(/<[^>]*>/g, ""),
         year: item.startDate?.year ? String(item.startDate.year) : "",
         poster: item.coverImage?.large ?? null,
         progress_total: item.episodes ?? item.chapters ?? null,
