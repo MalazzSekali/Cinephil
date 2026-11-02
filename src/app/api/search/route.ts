@@ -8,6 +8,7 @@ type SearchResult = {
   year: string;
   poster: string | null;
   progress_total: number | null;
+  season_count?: number | null;
 };
 
 const tmdbGenres: Record<string, string> = {
@@ -90,10 +91,15 @@ export async function GET(req: Request) {
   if (!apiKey && ["all", "tv"].includes(type)) {
     // TVMaze provides a no-key TV fallback before TMDB is configured.
     tasks.push(getJson(`https://api.tvmaze.com/search/shows?q=${encodeURIComponent(q)}`)
-      .then(data => data.slice(0, 12).map(({ show }: any) => ({
-        id: `tvmaze:${show.id}`, category: "tv" as const, title: show.name,
-        description: (show.summary ?? "").replace(/<[^>]*>/g, ""), year: (show.premiered ?? "").slice(0, 4),
-        poster: show.image?.medium ?? null, progress_total: null,
+      .then(data => Promise.all(data.slice(0, 8).map(async ({ show }: any) => {
+        let seasons: any[] = [];
+        try { seasons = await getJson(`https://api.tvmaze.com/shows/${show.id}/seasons`); } catch { /* Keep search results even when season data is unavailable. */ }
+        const episodeTotal = seasons.reduce((total, season) => total + (season.episodeOrder ?? 0), 0);
+        return {
+          id: `tvmaze:${show.id}`, category: "tv" as const, title: show.name,
+          description: (show.summary ?? "").replace(/<[^>]*>/g, ""), year: (show.premiered ?? "").slice(0, 4),
+          poster: show.image?.medium ?? null, progress_total: episodeTotal || null, season_count: seasons.length || null,
+        };
       }))).catch(() => []));
   }
 
