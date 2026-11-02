@@ -82,7 +82,7 @@ export async function GET(req: Request) {
       if (wikiGenre) {
         const categoryData = await getJson(`https://en.wikipedia.org/w/api.php?action=query&list=categorymembers&cmtitle=Category:${encodeURIComponent(wikiGenre.replaceAll(" ", "_"))}&cmtype=page&cmlimit=15&format=json`);
         const titles = (categoryData.query?.categorymembers ?? []).map((page: any) => page.title).join("|");
-        if (titles) data = await getJson(`https://en.wikipedia.org/w/api.php?action=query&generator=pages&titles=${encodeURIComponent(titles)}&prop=pageimages%7Cextracts&piprop=thumbnail&pithumbsize=500&exintro=1&explaintext=1&format=json`);
+        if (titles) data = await getJson(`https://en.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(titles)}&prop=pageimages%7Cextracts&piprop=thumbnail&pithumbsize=500&exintro=1&explaintext=1&format=json`);
         else data = await getJson(`https://en.wikipedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent(`${q} film`)}&gsrlimit=12&prop=pageimages%7Cextracts&piprop=thumbnail&pithumbsize=500&exintro=1&explaintext=1&format=json`);
       } else {
         data = await getJson(`https://en.wikipedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent(`${q} film`)}&gsrlimit=12&prop=pageimages%7Cextracts&piprop=thumbnail&pithumbsize=500&exintro=1&explaintext=1&format=json`);
