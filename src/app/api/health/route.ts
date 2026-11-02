@@ -6,7 +6,11 @@ export async function GET() {
     const { error } = await db().from("users").select("id", { head: true }).limit(1);
     if (error) throw error;
     return NextResponse.json({ status: "ok", database: "connected" });
-  } catch {
-    return NextResponse.json({ status: "unavailable" }, { status: 503 });
+  } catch (error) {
+    const configMissing = error instanceof Error && error.message.includes("Database is not configured");
+    return NextResponse.json(
+      { status: "unavailable", reason: configMissing ? "configuration_missing" : "connection_failed" },
+      { status: 503 },
+    );
   }
 }
