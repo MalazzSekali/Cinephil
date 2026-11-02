@@ -5,17 +5,17 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 type User = { id: string; username: string; display_name: string };
 type Item = {
   id: string; media_id: string; category: string; title: string; poster_url: string | null;
-  source_url: string | null; status: string; progress: number; progress_total: number | null;
+  source_url: string | null; status: string; progress: number; progress_total: number | null; season_count: number | null;
   rating: number | null; review: string | null; is_favorite: boolean;
 };
-type Result = { id: string; category: string; title: string; description?: string; year: string; poster: string | null; progress_total: number | null; external_url?: string };
+type Result = { id: string; category: string; title: string; description?: string; year: string; poster: string | null; progress_total: number | null; season_count?: number | null; external_url?: string };
 
 const categories = ["all", "movie", "tv", "anime", "manga", "manhwa"];
 const labels: Record<string, string> = { movie: "Movie", tv: "TV Series", anime: "Anime", manga: "Manga", manhwa: "Manhwa" };
 const statuses: Record<string, string> = { plan: "Plan to watch", current: "In progress", completed: "Completed", hold: "On hold", dropped: "Dropped" };
 const chartColors: Record<string, string> = { plan: "#d9fb71", current: "#9bb9ff", completed: "#ffb86c", hold: "#db9cff", dropped: "#77776e" };
 
-export default function Dashboard({ initialUser }: { initialUser: User | null }) {
+export default function Dashboard({ initialUser, view = "overview" }: { initialUser: User | null; view?: "overview" | "collection" | "discover" }) {
   const [user, setUser] = useState(initialUser);
   const [items, setItems] = useState<Item[]>([]);
   const [query, setQuery] = useState("");
@@ -44,7 +44,7 @@ export default function Dashboard({ initialUser }: { initialUser: User | null })
       } catch (error) {
         if (!controller.signal.aborted) { setResults([]); setSearchMessage(error instanceof Error ? error.message : "Search is unavailable right now."); }
       } finally { if (!controller.signal.aborted) setBusy(false); }
-    }, 350);
+    }, 120);
     return () => { window.clearTimeout(timer); controller.abort(); };
   }, [query, category]);
 
@@ -59,7 +59,7 @@ export default function Dashboard({ initialUser }: { initialUser: User | null })
     if (!user) { location.href = "/login"; return; }
     setErr("");
     try {
-      const response = await fetch("/api/collection", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ media_id: item.id, category: item.category, title: item.title, poster_url: item.poster, source_url: item.external_url ?? null, status: "plan", progress_total: item.progress_total }) });
+      const response = await fetch("/api/collection", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ media_id: item.id, category: item.category, title: item.title, poster_url: item.poster, source_url: item.external_url ?? null, season_count: item.season_count ?? null, status: "plan", progress_total: item.progress_total }) });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error ?? "Could not save this title.");
       setResults(current => current.filter(result => result.id !== item.id));
@@ -109,8 +109,8 @@ export default function Dashboard({ initialUser }: { initialUser: User | null })
   const progress = items.filter(item => item.status === "current");
   const recent = items.slice().sort((a, b) => b.id.localeCompare(a.id)).slice(0, 4);
 
-  return <main className="app"><div className="shell">
-    <header className="topbar"><a href="/" className="brand" style={{ textDecoration: "none", color: "inherit" }}>cinephil<b>•</b></a><nav className="nav"><a className="active" href="/">Overview</a><a href="#collection">My collection</a><a href="#discover">Discover</a><a href="#activity">Activity</a></nav><div style={{ display: "flex", alignItems: "center", gap: 12 }}>{user ? <><button className="btn" style={{ height: 34, padding: "0 11px", fontSize: 11 }} onClick={logout}>Log out</button><div className="avatar">{user.username.slice(0, 2).toUpperCase()}</div></> : <a href="/login" className="btn" style={{ height: 34, padding: "8px 13px", fontSize: 11, textDecoration: "none" }}>Sign in</a>}</div></header>
+  return <main className="app" data-view={view}><div className="shell">
+    <header className="topbar"><a href="/" className="brand" style={{ textDecoration: "none", color: "inherit" }}>cinephil<b>•</b></a><nav className="nav"><a className={view === "overview" ? "active" : ""} href="/">Overview</a><a className={view === "collection" ? "active" : ""} href="/collection">My collection</a><a className={view === "discover" ? "active" : ""} href="/discover">Discover</a></nav><div style={{ display: "flex", alignItems: "center", gap: 12 }}>{user ? <><button className="btn" style={{ height: 34, padding: "0 11px", fontSize: 11 }} onClick={logout}>Log out</button><div className="avatar">{user.username.slice(0, 2).toUpperCase()}</div></> : <a href="/login" className="btn" style={{ height: 34, padding: "8px 13px", fontSize: 11, textDecoration: "none" }}>Sign in</a>}</div></header>
     <section className="hero"><div><div className="eyebrow">Your personal universe</div><h1>{user ? `Good to see you, ${user.display_name}.` : "Stories stay with us."}</h1><p>Every film, episode, and chapter — all in one place.</p></div><div className="date">YOUR LIFE IN STORIES</div></section>
     <section className="stats"><div className="stat"><label>Completed</label><strong>{counts.completed}<small>titles</small></strong></div><div className="stat"><label>In progress</label><strong>{counts.watching}<small>right now</small></strong></div><div className="stat"><label>On your list</label><strong>{counts.plan}<small>up next</small></strong></div><div className="stat"><label>Your ratings</label><strong>{counts.rated}<small>shared</small></strong></div></section>
 
@@ -122,7 +122,7 @@ export default function Dashboard({ initialUser }: { initialUser: User | null })
       <div className="side-card"><h3>Collection at a glance</h3>{items.length ? <div className="status-chart-wrap"><div className="status-chart" style={{ background: `conic-gradient(${chart})` }}><div><strong>{items.length}</strong><span>titles</span></div></div><div className="chart-legend">{Object.entries(statuses).map(([status, label]) => <div key={status}><i style={{ background: chartColors[status] }} /><span>{label}</span><b>{statusCounts[status]}</b></div>)}</div></div> : <p className="chart-empty">Your status chart will appear as you add stories.</p>}</div>
       <div className="side-card"><h3>By format</h3>{categories.slice(1).map(value => { const count = items.filter(item => item.category === value).length; return <div key={value}><div className="bar-row"><span>{labels[value]}</span><span>{count}</span></div><div className="bar"><i style={{ width: `${items.length ? Math.max(count ? 4 : 0, count / items.length * 100) : 0}%` }} /></div></div>})}</div><div className="side-card"><h3>A little about you</h3><p style={{ fontSize: 11, color: "#99988f", lineHeight: 1.7, margin: 0 }}>{user ? `@${user.username} · collecting stories since today.` : "Sign in to keep your collection synced across devices."}</p></div></aside></div>
     <footer style={{ borderTop: "1px solid #252523", marginTop: 40, padding: "22px 0", color: "#706f68", fontSize: 10 }}>CINEPHIL <span style={{ float: "right" }}>A life in stories, at your own pace.</span></footer>
-  </div><nav className="mobile-nav"><a href="#">Home</a><a href="#collection">Collection</a><a href="#discover">Discover</a><a href="#activity">Activity</a></nav>
+  </div><nav className="mobile-nav"><a href="/">Home</a><a href="/collection">Collection</a><a href="/discover">Discover</a></nav>
 
   {showManual && <div className="modal-backdrop" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget) setShowManual(false); }}><section className="manual-modal" role="dialog" aria-modal="true" aria-labelledby="manual-title"><button className="modal-close" aria-label="Close" onClick={() => setShowManual(false)}>×</button><div className="eyebrow">Your collection</div><h2 id="manual-title">Add a story manually</h2><p>Add a title the search can’t find. The link and poster are optional.</p><form onSubmit={addManual}><label>Title<input name="title" required maxLength={300} placeholder="Story title" /></label><label>Format<select name="category" defaultValue="movie">{categories.slice(1).map(value => <option key={value} value={value}>{labels[value]}</option>)}</select></label><label>Story link<input name="source_url" type="url" placeholder="https://…" /></label><label>Poster image link<input name="poster_url" type="url" placeholder="https://…" /></label><div className="modal-actions"><button className="btn" type="button" onClick={() => setShowManual(false)}>Cancel</button><button className="btn-primary" type="submit" disabled={savingManual}>{savingManual ? "Saving…" : "Add to collection"}</button></div></form></section></div>}
   </main>;
