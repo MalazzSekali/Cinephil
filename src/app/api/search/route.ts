@@ -215,8 +215,33 @@ export async function GET(req: Request) {
     }).catch(() => []));
   }
 
+  if (params.get("stream") === "1") {
+    const encoder = new TextEncoder();
+    let canceled = false;
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        void Promise.all(tasks.map(async task => {
+          const batch = await task;
+          if (canceled || batch.length === 0) return;
+          const uniqueBatch = [...new Map(batch.map(item => [item.id, item])).values()];
+          controller.enqueue(encoder.encode(`${JSON.stringify({ results: uniqueBatch })}\n`));
+        })).then(() => { if (!canceled) controller.close(); }).catch(error => {
+          if (!canceled) controller.error(error);
+        });
+      },
+      cancel() { canceled = true; },
+    });
+    return new Response(stream, {
+      headers: {
+        "Content-Type": "application/x-ndjson; charset=utf-8",
+        "Cache-Control": "no-cache, no-transform",
+      },
+    });
+  }
   const results = (await Promise.all(tasks)).flat();
   const unique = [...new Map(results.map(item => [item.id, item])).values()];
   const message = unique.length === 0 ? "No matches found. Try a title, creator, or another category." : null;
-  return NextResponse.json({ results: unique, message });
+  return NextResponse.json({ results: unique, message }, {
+    headers: { "Cache-Control": "public, s-maxage=30, stale-while-revalidate=120" },
+  });
 }
