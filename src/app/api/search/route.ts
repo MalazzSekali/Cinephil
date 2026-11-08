@@ -163,10 +163,10 @@ export async function GET(req: Request) {
       })).then((items: SearchResult[]) => items.filter(item => type === "cartoon" ? item.category === "cartoon" : type !== "tv" || item.category === "tv"))).catch(() => []));
   }
 
-  if (["all", "anime", "manga", "manhwa"].includes(type)) {
+  if (["all", "anime", "cartoon", "manga", "manhwa"].includes(type)) {
     const mediaType = type === "manga" || type === "manhwa" ? "MANGA" : "ANIME";
-    const category = type === "all" ? "anime" : type as "anime" | "manga" | "manhwa";
-    const country = type === "manhwa" ? "KR" : null;
+    const category = type === "all" || type === "cartoon" ? "anime" : type as "anime" | "manga" | "manhwa";
+    const country = type === "manhwa" ? "KR" : type === "anime" ? "JP" : null;
     const query = `query ($search: String!, $type: MediaType!, $country: CountryCode) {
       Page(page: 1, perPage: 15) {
         media(search: $search, type: $type, countryOfOrigin: $country, isAdult: false, sort: SEARCH_MATCH) {
@@ -185,18 +185,31 @@ export async function GET(req: Request) {
       if (data.errors?.length) throw new Error("AniList search failed");
       const media = data.data?.Page?.media ?? [];
       if (media.length === 0) throw new Error("AniList returned no results");
-      return media.map((item: any) => ({
-        id: `anilist:${mediaType.toLowerCase()}:${item.id}`, category,
-        title: item.title?.english ?? item.title?.romaji ?? "Untitled",
-        description: (item.description ?? "").replace(/~![\s\S]*?!~/g, "[spoiler]").replace(/<[^>]*>/g, ""),
-        year: item.startDate?.year ? String(item.startDate.year) : "",
-        poster: item.coverImage?.large ?? null,
-        progress_total: item.episodes ?? item.chapters ?? null,
-        external_url: item.siteUrl ?? null,
-      }));
+      return media.map((item: any) => {
+        const resultCategory: SearchResult["category"] = mediaType === "ANIME"
+          && typeof item.countryOfOrigin === "string" && item.countryOfOrigin !== "JP"
+          ? "cartoon"
+          : category;
+        return {
+          id: `anilist:${mediaType.toLowerCase()}:${item.id}`, category: resultCategory,
+          title: item.title?.english ?? item.title?.romaji ?? "Untitled",
+          description: (item.description ?? "").replace(/~![\s\S]*?!~/g, "[spoiler]").replace(/<[^>]*>/g, ""),
+          year: item.startDate?.year ? String(item.startDate.year) : "",
+          poster: item.coverImage?.large ?? null,
+          progress_total: item.episodes ?? item.chapters ?? null,
+          external_url: item.siteUrl ?? null,
+        } satisfies SearchResult;
+      }).filter((item: SearchResult) => type === "cartoon"
+        ? item.category === "cartoon"
+        : type !== "anime" || item.category === "anime");
     }).catch(async () => {
-      const fallbackType = mediaType === "ANIME" ? "anime" : "manga";
-      const data = await getJson(`https://kitsu.io/api/edge/${fallbackType}?filter[text]=${encodeURIComponent(q)}&page[limit]=12`);
+      if (mediaType === "ANIME") {
+        // Jikan is a Japanese-focused anime fallback, so Western cartoons can't leak into Anime.
+        if (type === "cartoon") return [];
+        const data = await getJson(`https://api.jikan.moe/v4/anime?q=${encodeURIComponent(q)}&limit=12`);
+        return (data.data ?? []).slice(0, 12).map((item: any) => jikanResult(item, "anime"));
+      }
+      const data = await getJson(`https://kitsu.io/api/edge/manga?filter[text]=${encodeURIComponent(q)}&page[limit]=12`);
       return (data.data ?? []).filter((item: any) => type !== "manhwa" || item.attributes?.subtype === "manhwa")
         .slice(0, 12).map((item: any) => kitsuResult(item, category));
     }).catch(() => []));
