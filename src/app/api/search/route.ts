@@ -72,7 +72,7 @@ function tmdbResult(item: any, kind: "movie" | "tv", category: "movie" | "tv" | 
     id: `tmdb:${kind}:${item.id}`, category, title: item.title ?? item.name ?? "Untitled",
     description: item.overview ?? "", year: (item.release_date ?? item.first_air_date ?? "").slice(0, 4),
     poster: item.poster_path ? `https://image.tmdb.org/t/p/w500${item.poster_path}` : null,
-    progress_total: item.number_of_episodes ?? null,
+    progress_total: kind === "movie" ? item.runtime ?? null : item.number_of_episodes ?? null,
     season_count: item.number_of_seasons ?? null,
   };
 }
@@ -125,7 +125,8 @@ export async function GET(req: Request) {
         ? `discover/${kind}?with_genres=${genreId}&sort_by=popularity.desc&include_adult=false`
         : `search/${kind}?query=${encodeURIComponent(q)}&include_adult=false`;
       const url = `https://api.themoviedb.org/3/${endpoint}${bearerToken ? "" : `&api_key=${encodeURIComponent(apiKey)}`}`;
-      const headers = bearerToken ? { Authorization: `Bearer ${apiKey}`, accept: "application/json" } : { accept: "application/json" };
+      const headers: Record<string, string> = { accept: "application/json" };
+      if (bearerToken) headers.Authorization = `Bearer ${apiKey}`;
       const searchTask = fetch(url, { headers, next: { revalidate: 3600 } })
         .then(async response => { if (!response.ok) throw new Error(`TMDB returned ${response.status}`); return response.json(); })
         .then(data => (data.results ?? []).slice(0, 12).map((item: any) => {
@@ -135,21 +136,26 @@ export async function GET(req: Request) {
         .catch(() => [] as SearchResult[]);
       tasks.push(searchTask);
 
-      // Search responses omit season and episode totals. Enrich TV results in
-      // a separate streamed batch so the first cards still appear immediately.
-      if (kind === "tv") {
+      // Search responses omit movie runtimes and TV season/episode totals.
+      // Enrich in a separate streamed batch so the first cards still appear immediately.
+      {
         tasks.push(searchTask.then(results => Promise.all(results.map(async item => {
-          const mediaId = item.id.match(/^tmdb:tv:(\d+)$/)?.[1];
-          if (!mediaId) return null;
+          const mediaId = item.id.slice(`tmdb:${kind}:`.length);
+          if (!/^\d+$/.test(mediaId)) return null;
           try {
-            const detailUrl = `https://api.themoviedb.org/3/tv/${mediaId}${bearerToken ? "" : `?api_key=${encodeURIComponent(apiKey)}`}`;
+            const detailUrl = `https://api.themoviedb.org/3/${kind}/${mediaId}${bearerToken ? "" : `?api_key=${encodeURIComponent(apiKey)}`}`;
             const response = await fetch(detailUrl, { headers, next: { revalidate: 3600 } });
             if (!response.ok) return null;
             const details = await response.json();
+            const runtime = kind === "movie" ? details.runtime : null;
+            const episodes = kind === "tv" ? details.number_of_episodes : null;
+            const seasons = kind === "tv" ? details.number_of_seasons : null;
+            if (kind === "movie" && !Number.isFinite(runtime)) return null;
+            if (kind === "tv" && !Number.isFinite(episodes) && !Number.isFinite(seasons)) return null;
             return {
               ...item,
-              season_count: details.number_of_seasons ?? item.season_count ?? null,
-              progress_total: details.number_of_episodes ?? item.progress_total ?? null,
+              season_count: seasons ?? item.season_count ?? null,
+              progress_total: runtime ?? episodes ?? item.progress_total ?? null,
             } satisfies SearchResult;
           } catch {
             return null;
