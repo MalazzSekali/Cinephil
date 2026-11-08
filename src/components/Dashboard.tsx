@@ -2,7 +2,7 @@
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import {
-  ArrowDownAZ, ArrowUpRight, BookOpen, Check, ChevronDown, CircleUserRound,
+  ArrowDownAZ, ArrowUpRight, BookOpen, Check, ChevronDown,
   Compass, Film, Heart, Layers3, LogOut, Minus, Plus, Search, Sparkles,
   Star, Trash2, Tv, X,
 } from "lucide-react";
@@ -15,15 +15,16 @@ type Item = {
   is_favorite: boolean; updated_at?: string;
 };
 type Result = {
-  id: string; category: string; title: string; description?: string; year: string;
+  id: string; category: string; title: string; author?: string; description?: string; year: string;
   poster: string | null; progress_total: number | null; season_count?: number | null;
   external_url?: string;
 };
 type View = "overview" | "collection" | "discover";
 
-const categories = ["all", "movie", "tv", "anime", "manga", "manhwa"];
+const categories = ["all", "movie", "tv", "cartoon", "anime", "manga", "manhwa", "book", "novel"];
 const labels: Record<string, string> = {
-  movie: "Film", tv: "Series", anime: "Anime", manga: "Manga", manhwa: "Manhwa",
+  movie: "Film", tv: "Series", cartoon: "Cartoon", anime: "Anime", manga: "Manga", manhwa: "Manhwa",
+  book: "Book", novel: "Novel",
 };
 const statuses: Record<string, string> = {
   plan: "Want to explore", current: "In progress", completed: "Completed",
@@ -34,7 +35,8 @@ const statusColors: Record<string, string> = {
   hold: "#d5a7ff", dropped: "#85868b",
 };
 const formatIcon: Record<string, typeof Film> = {
-  movie: Film, tv: Tv, anime: Sparkles, manga: BookOpen, manhwa: BookOpen,
+  movie: Film, tv: Tv, cartoon: Tv, anime: Sparkles, manga: BookOpen, manhwa: BookOpen,
+  book: BookOpen, novel: BookOpen,
 };
 
 function formatLabel(category: string) {
@@ -42,7 +44,9 @@ function formatLabel(category: string) {
 }
 
 function progressUnit(category: string) {
-  return category === "manga" || category === "manhwa" ? "chapters" : "episodes";
+  if (category === "book" || category === "novel") return "pages";
+  if (category === "manga" || category === "manhwa") return "chapters";
+  return "episodes";
 }
 
 function Poster({ src, title, category }: { src: string | null; title: string; category: string }) {
@@ -72,7 +76,19 @@ function CollectionCard({ item, onUpdate, onRemove }: {
   const hasProgress = item.category !== "movie";
   const complete = item.progress_total ? Math.min(100, item.progress / item.progress_total * 100) : 0;
   const [rating, setRating] = useState(item.rating?.toString() ?? "");
+  const [progressDraft, setProgressDraft] = useState(String(item.progress));
   useEffect(() => setRating(item.rating?.toString() ?? ""), [item.rating]);
+  useEffect(() => setProgressDraft(String(item.progress)), [item.progress]);
+
+  function saveProgress() {
+    const parsed = Number.parseInt(progressDraft, 10);
+    const value = Math.max(0, Number.isFinite(parsed) ? parsed : 0);
+    const next = item.progress_total ? Math.min(item.progress_total, value) : value;
+    setProgressDraft(String(next));
+    if (next === item.progress) return;
+    const finished = item.progress_total !== null && item.progress_total > 0 && next >= item.progress_total;
+    onUpdate(item, { progress: next, status: finished ? "completed" : item.status === "completed" ? "current" : next > 0 && item.status === "plan" ? "current" : item.status });
+  }
 
   return <article className="collection-card">
     <div className="collection-art-wrap"><Poster src={item.poster_url} title={item.title} category={item.category} />
@@ -85,7 +101,7 @@ function CollectionCard({ item, onUpdate, onRemove }: {
       {hasProgress && <div className="progress-block">
         <div className="progress-line"><span>{item.progress_total ? `${item.progress} / ${item.progress_total} ${progressUnit(item.category)}` : `${item.progress} ${progressUnit(item.category)}`}</span><b>{item.progress_total ? `${Math.round(complete)}%` : "TRACKING"}</b></div>
         {item.progress_total ? <div className="progress-track"><i style={{ width: `${complete}%` }} /></div> : null}
-        <div className="stepper"><button aria-label={`Decrease progress for ${item.title}`} onClick={() => onUpdate(item, { progress: Math.max(0, item.progress - 1), ...(item.status === "completed" ? { status: "current" } : {}) })}><Minus size={13} /></button><span>Progress</span><button aria-label={`Increase progress for ${item.title}`} disabled={Boolean(item.progress_total && item.progress >= item.progress_total)} onClick={() => {
+        <div className="stepper"><button aria-label={`Decrease progress for ${item.title}`} onClick={() => onUpdate(item, { progress: Math.max(0, item.progress - 1), ...(item.status === "completed" ? { status: "current" } : {}) })}><Minus size={13} /></button><label className="progress-entry"><span>{progressUnit(item.category)}</span><input aria-label={`Current ${progressUnit(item.category)} for ${item.title}`} type="number" min="0" max={item.progress_total ?? undefined} value={progressDraft} onChange={event => setProgressDraft(event.target.value)} onBlur={saveProgress} onKeyDown={event => { if (event.key === "Enter") { event.preventDefault(); event.currentTarget.blur(); } }} /></label><button aria-label={`Increase progress for ${item.title}`} disabled={Boolean(item.progress_total && item.progress >= item.progress_total)} onClick={() => {
           const next = item.progress_total ? Math.min(item.progress_total, item.progress + 1) : item.progress + 1;
           const finished = item.progress_total !== null && item.progress_total > 0 && next >= item.progress_total;
           onUpdate(item, { progress: next, status: finished ? "completed" : item.status === "plan" ? "current" : item.status });
@@ -116,6 +132,7 @@ export default function Dashboard({ initialUser, view = "overview" }: { initialU
   const [sortBy, setSortBy] = useState("recent");
   const [err, setErr] = useState("");
   const [showManual, setShowManual] = useState(false);
+  const [manualCategory, setManualCategory] = useState("movie");
   const [savingManual, setSavingManual] = useState(false);
   const [addingId, setAddingId] = useState<string | null>(null);
 
@@ -258,9 +275,9 @@ export default function Dashboard({ initialUser, view = "overview" }: { initialU
   }, [items, filter, formatFilter, collectionQuery, sortBy]);
 
   const viewCopy: Record<View, { eyebrow: string; title: string; description: string }> = {
-    overview: { eyebrow: "Your personal cinema", title: user ? `Welcome back, ${user.display_name}.` : "A home for every story.", description: "Keep the films, series, anime and pages you love close." },
+    overview: { eyebrow: "Your personal library", title: user ? `Welcome back, ${user.display_name}.` : "A home for every story.", description: "Keep the films, shows, anime, books and novels you love close." },
     collection: { eyebrow: "Your library, your rules", title: "My collection", description: "Everything you are watching, reading, saving and remembering." },
-    discover: { eyebrow: "Find your next favorite", title: "Discover stories", description: "Search across film, television, anime, manga and manhwa." },
+    discover: { eyebrow: "Find your next favorite", title: "Discover stories", description: "Search films, series, anime, manga, manhwa, books and novels." },
   };
   const copy = viewCopy[view];
 
@@ -310,7 +327,7 @@ export default function Dashboard({ initialUser, view = "overview" }: { initialU
       </>}
 
       {view === "collection" && <section className="library-view">
-        <div className="library-toolbar"><label className="library-search"><Search size={17} /><input value={collectionQuery} onChange={event => setCollectionQuery(event.target.value)} placeholder="Find something in your collection" aria-label="Filter your collection" />{collectionQuery && <button onClick={() => setCollectionQuery("")} aria-label="Clear filter"><X size={15} /></button>}</label><button className="primary-button" onClick={() => user ? setShowManual(true) : location.href = "/login"}><Plus size={17} />Add a story</button></div>
+        <div className="library-toolbar"><label className="library-search"><Search size={17} /><input value={collectionQuery} onChange={event => setCollectionQuery(event.target.value)} placeholder="Find something in your collection" aria-label="Filter your collection" />{collectionQuery && <button onClick={() => setCollectionQuery("")} aria-label="Clear filter"><X size={15} /></button>}</label><button className="primary-button" onClick={() => { if (user) { setManualCategory("movie"); setShowManual(true); } else location.href = "/login"; }}><Plus size={17} />Add a story</button></div>
         <div className="library-controls"><div className="filter-tabs" aria-label="Filter by status">{[["all", "Everything"], ...Object.entries(statuses)].map(([value, label]) => <button key={value} className={filter === value ? "selected" : ""} onClick={() => setFilter(value)}>{label}<span>{value === "all" ? items.length : statusCounts[value]}</span></button>)}</div><div className="filter-selects"><label className="select-wrap"><span className="sr-only">Filter by format</span><select value={formatFilter} onChange={event => setFormatFilter(event.target.value)}>{categories.map(value => <option key={value} value={value}>{value === "all" ? "All formats" : formatLabel(value)}</option>)}</select><ChevronDown size={14} /></label><label className="select-wrap sort-select"><ArrowDownAZ size={15} /><span className="sr-only">Sort collection</span><select value={sortBy} onChange={event => setSortBy(event.target.value)}><option value="recent">Recently updated</option><option value="title">Title A–Z</option><option value="rating">Top rated</option><option value="progress">Progress</option></select><ChevronDown size={14} /></label></div></div>
         <div className="library-count"><span>{collectionLoading ? "Loading your collection…" : `Showing ${visibleItems.length} of ${items.length} ${items.length === 1 ? "story" : "stories"}`}</span><span>YOUR COLLECTION</span></div>
         {collectionLoading ? <div className="collection-grid">{Array.from({ length: 8 }, (_, index) => <div className="skeleton-card" key={index}><div /><span /><i /></div>)}</div> : visibleItems.length ? <div className="collection-grid">{visibleItems.map(item => <CollectionCard key={item.id} item={item} onUpdate={(value, patch) => void update(value, patch)} onRemove={value => void remove(value)} />)}</div> : <div className="empty-state"><div className="empty-state-icon"><BookOpen size={22} /></div><span className="eyebrow">A FRESH PAGE</span><h2>{items.length ? "Nothing matches these filters" : "Your collection is waiting"}</h2><p>{items.length ? "Try a different format, status or search." : "Save stories from Discover or add one by hand to start building your library."}</p>{items.length ? <button className="secondary-button" onClick={() => { setFilter("all"); setFormatFilter("all"); setCollectionQuery(""); }}>Clear filters</button> : <a className="primary-button" href="/discover"><Compass size={16} />Discover stories</a>}</div>}
@@ -319,12 +336,12 @@ export default function Dashboard({ initialUser, view = "overview" }: { initialU
       {view === "discover" && <section className="discover-view">
         <div className="discover-search"><div className="big-search"><Search size={21} /><input value={query} onChange={event => setQuery(event.target.value)} placeholder="Try a title, creator or genre…" aria-label="Search stories" autoComplete="off" />{query && <button onClick={() => setQuery("")} aria-label="Clear search"><X size={17} /></button>}<kbd>LIVE SEARCH</kbd></div>
           <label className="select-wrap category-select"><span className="sr-only">Search category</span><select value={category} onChange={event => setCategory(event.target.value)}>{categories.map(value => <option key={value} value={value}>{value === "all" ? "All stories" : formatLabel(value)}</option>)}</select><ChevronDown size={15} /></label>
-          <button className="primary-button" onClick={() => user ? setShowManual(true) : location.href = "/login"}><Plus size={17} />Add manually</button>
+          <button className="primary-button" onClick={() => { if (user) { setManualCategory("movie"); setShowManual(true); } else location.href = "/login"; }}><Plus size={17} />Add manually</button>
         </div>
         <div className="discover-formats">{categories.map(value => <button key={value} className={category === value ? "selected" : ""} onClick={() => setCategory(value)}>{value === "all" ? <Layers3 size={14} /> : (() => { const Icon = formatIcon[value]; return <Icon size={14} />; })()}{value === "all" ? "All" : formatLabel(value)}</button>)}</div>
         {!query.trim() ? <div className="discover-welcome"><div className="welcome-orbit orbit-one" /><div className="welcome-orbit orbit-two" /><div className="welcome-symbol"><Search size={24} /></div><span className="eyebrow">A WORLD OF STORIES</span><h2>What are you in the mood for?</h2><p>Start typing to search across your favorite kinds of stories.</p><div className="welcome-chips">{["Harry Potter", "romance", "One Piece", "Dune"].map(term => <button key={term} onClick={() => setQuery(term)}>{term}<ArrowUpRight size={13} /></button>)}</div></div> : <>
           <div className="results-heading"><div><span className="eyebrow">SEARCH RESULTS</span><h2>{busy ? "Finding your next story…" : searchMessage ? "No matches this time" : `${results.length} ${results.length === 1 ? "story" : "stories"} found`}</h2></div>{query && <span className="query-chip"><Search size={13} />{query}</span>}</div>
-          {busy ? <div className="discover-grid">{Array.from({ length: 8 }, (_, index) => <div className="skeleton-result" key={index}><div /><span /><i /></div>)}</div> : results.length ? <div className="discover-grid">{results.map(item => <article className="discover-card" key={`${item.category}-${item.id}`}><div className="discover-card-art"><Poster src={item.poster} title={item.title} category={item.category} /><span className="format-pill">{formatLabel(item.category)}</span></div><div className="discover-card-body"><h3 title={item.title}>{item.title}</h3><div className="result-meta">{item.year || "Year unknown"}{item.season_count ? ` · ${item.season_count} seasons` : ""}{item.progress_total ? ` · ${item.progress_total} ${item.category === "manga" || item.category === "manhwa" ? "chapters" : item.category === "movie" ? "min" : "episodes"}` : ""}</div>{item.description && <p>{item.description}</p>}<button onClick={() => void add(item)} disabled={addingId === item.id}><Plus size={15} />{addingId === item.id ? "Adding…" : "Add to collection"}</button></div></article>)}</div> : <div className="no-results"><div className="empty-state-icon"><Search size={20} /></div><strong>{searchMessage || "No matches found"}</strong><p>Try a shorter title or choose another format.</p></div>}
+          {busy ? <div className="discover-grid">{Array.from({ length: 8 }, (_, index) => <div className="skeleton-result" key={index}><div /><span /><i /></div>)}</div> : results.length ? <div className="discover-grid">{results.map(item => <article className="discover-card" key={`${item.category}-${item.id}`}><div className="discover-card-art"><Poster src={item.poster} title={item.title} category={item.category} /><span className="format-pill">{formatLabel(item.category)}</span></div><div className="discover-card-body"><h3 title={item.title}>{item.title}</h3>{item.author && <div className="result-author">{item.author}</div>}<div className="result-meta">{item.year || "Year unknown"}{item.season_count ? ` · ${item.season_count} seasons` : ""}{item.progress_total ? ` · ${item.progress_total} ${item.category === "movie" ? "min" : progressUnit(item.category)}` : ""}</div>{item.description && <p>{item.description}</p>}<button onClick={() => void add(item)} disabled={addingId === item.id}><Plus size={15} />{addingId === item.id ? "Adding…" : "Add to collection"}</button></div></article>)}</div> : <div className="no-results"><div className="empty-state-icon"><Search size={20} /></div><strong>{searchMessage || "No matches found"}</strong><p>Try a shorter title or choose another format.</p></div>}
         </>}
       </section>}
 
@@ -335,13 +352,12 @@ export default function Dashboard({ initialUser, view = "overview" }: { initialU
 
     {showManual && <div className="modal-backdrop" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget) setShowManual(false); }}><section className="manual-modal" role="dialog" aria-modal="true" aria-labelledby="manual-title"><button className="modal-close" aria-label="Close" onClick={() => setShowManual(false)}><X size={18} /></button><span className="eyebrow">MAKE IT YOURS</span><h2 id="manual-title">Add a story</h2><p>Keep track of something the search can’t find. You can fill in more details later.</p><form onSubmit={addManual}>
       <label>Title<input name="title" required maxLength={300} placeholder="What are you watching or reading?" autoFocus /></label>
-      <div className="form-pair"><label>Format<select name="category" defaultValue="movie">{categories.slice(1).map(value => <option key={value} value={value}>{formatLabel(value)}</option>)}</select></label><label>Status<select name="status" defaultValue="plan">{Object.entries(statuses).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label></div>
+      <div className="form-pair"><label>Format<select name="category" value={manualCategory} onChange={event => setManualCategory(event.target.value)}>{categories.slice(1).map(value => <option key={value} value={value}>{formatLabel(value)}</option>)}</select></label><label>Status<select name="status" defaultValue="plan">{Object.entries(statuses).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label></div>
       <label>Story link <span>OPTIONAL</span><input name="source_url" type="url" placeholder="https://…" /></label>
       <label>Poster image link <span>OPTIONAL</span><input name="poster_url" type="url" placeholder="https://…" /></label>
-      <div className="form-pair"><label>Seasons <span>OPTIONAL</span><input name="season_count" type="number" min="0" placeholder="e.g. 3" /></label><label>Episodes or chapters <span>OPTIONAL</span><input name="progress_total" type="number" min="0" placeholder="e.g. 24" /></label></div>
-      <label>Progress so far <span>OPTIONAL</span><input name="progress" type="number" min="0" defaultValue="0" /></label>
+      {(manualCategory === "tv" || manualCategory === "cartoon" || manualCategory === "anime") && <label>Seasons <span>OPTIONAL</span><input name="season_count" type="number" min="0" placeholder="e.g. 3" /></label>}
+      <div className="form-pair"><label>Total {progressUnit(manualCategory)} <span>OPTIONAL</span><input name="progress_total" type="number" min="0" placeholder={manualCategory === "book" || manualCategory === "novel" ? "e.g. 320" : "e.g. 24"} /></label><label>Current {progressUnit(manualCategory)} <span>OPTIONAL</span><input name="progress" type="number" min="0" defaultValue="0" /></label></div>
       <div className="modal-actions"><button className="secondary-button" type="button" onClick={() => setShowManual(false)}>Cancel</button><button className="primary-button" type="submit" disabled={savingManual}>{savingManual ? "Saving…" : <><Plus size={16} />Add to collection</>}</button></div>
     </form></section></div>}
   </main>;
 }
-
