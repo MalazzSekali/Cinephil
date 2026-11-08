@@ -127,7 +127,7 @@ export async function GET(req: Request) {
       const url = `https://api.themoviedb.org/3/${endpoint}${bearerToken ? "" : `&api_key=${encodeURIComponent(apiKey)}`}`;
       const headers: Record<string, string> = { accept: "application/json" };
       if (bearerToken) headers.Authorization = `Bearer ${apiKey}`;
-      const searchTask = fetch(url, { headers, next: { revalidate: 3600 } })
+      const searchTask: Promise<SearchResult[]> = fetch(url, { headers, next: { revalidate: 3600 } })
         .then(async response => { if (!response.ok) throw new Error(`TMDB returned ${response.status}`); return response.json(); })
         .then(data => (data.results ?? []).slice(0, 12).map((item: any) => {
           const category = kind === "tv" && isCartoon(item) ? "cartoon" : kind;
@@ -139,7 +139,7 @@ export async function GET(req: Request) {
       // Search responses omit movie runtimes and TV season/episode totals.
       // Enrich in a separate streamed batch so the first cards still appear immediately.
       {
-        tasks.push(searchTask.then(results => Promise.all(results.map(async item => {
+        const detailTask: Promise<SearchResult[]> = searchTask.then((results: SearchResult[]) => Promise.all(results.map(async (item: SearchResult): Promise<SearchResult | null> => {
           const mediaId = item.id.slice(`tmdb:${kind}:`.length);
           if (!/^\d+$/.test(mediaId)) return null;
           try {
@@ -160,7 +160,8 @@ export async function GET(req: Request) {
           } catch {
             return null;
           }
-        }))).then(enriched => enriched.filter((item): item is SearchResult => item !== null)));
+        }))).then((enriched: Array<SearchResult | null>) => enriched.filter((item): item is SearchResult => item !== null));
+        tasks.push(detailTask);
       }
     }
   } else if (["all", "movie"].includes(type)) {
