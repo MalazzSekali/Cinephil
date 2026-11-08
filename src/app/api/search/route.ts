@@ -2,14 +2,57 @@ import { NextResponse } from "next/server";
 
 type SearchResult = {
   id: string;
-  category: "movie" | "tv" | "anime" | "manga" | "manhwa";
+  category: "movie" | "tv" | "cartoon" | "anime" | "manga" | "manhwa" | "book" | "novel";
   title: string;
+  author?: string;
   description?: string;
   year: string;
   poster: string | null;
   progress_total: number | null;
   season_count?: number | null;
+  external_url?: string | null;
 };
+
+function isFiction(categories: string[] = [], subjects: string[] = []) {
+  return [...categories, ...subjects].some(value => /fiction|novel|fantasy|romance|thriller|mystery|science fiction/i.test(value));
+}
+
+async function searchBooks(term: string, requestedType: "all" | "book" | "novel"): Promise<SearchResult[]> {
+  const novelOnly = requestedType === "novel";
+  const googleQuery = novelOnly ? `subject:fiction ${term}` : term;
+  try {
+    const data = await getJson(`https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(googleQuery)}&maxResults=15&printType=books&orderBy=relevance`);
+    return (data.items ?? []).map((volume: any) => {
+      const info = volume.volumeInfo ?? {};
+      const fiction = isFiction(info.categories ?? []);
+      const category = requestedType === "all" ? (fiction ? "novel" : "book") : requestedType;
+      const image = info.imageLinks?.thumbnail ?? info.imageLinks?.smallThumbnail ?? null;
+      return {
+        id: `googlebooks:${volume.id}`, category, title: info.title ?? "Untitled",
+        author: Array.isArray(info.authors) ? info.authors.join(", ") : "",
+        description: info.description ?? "",
+        year: (info.publishedDate ?? "").slice(0, 4),
+        poster: image ? image.replace("http://", "https://") : null,
+        progress_total: Number.isInteger(info.pageCount) ? info.pageCount : null,
+        external_url: info.infoLink ?? info.previewLink ?? null,
+      } satisfies SearchResult;
+    }).filter((result: SearchResult) => !novelOnly || result.category === "novel");
+  } catch {
+    const data = await getJson(`https://openlibrary.org/search.json?q=${encodeURIComponent(googleQuery)}&limit=15&fields=key,title,author_name,first_publish_year,cover_i,number_of_pages_median,subject`);
+    return (data.docs ?? []).map((work: any) => {
+      const fiction = isFiction([], work.subject ?? []);
+      const category = requestedType === "all" ? (fiction ? "novel" : "book") : requestedType;
+      return {
+        id: `openlibrary:${work.key ?? work.title}`, category,
+        title: work.title ?? "Untitled", author: (work.author_name ?? []).slice(0, 3).join(", "),
+        description: "", year: work.first_publish_year ? String(work.first_publish_year) : "",
+        poster: work.cover_i ? `https://covers.openlibrary.org/b/id/${work.cover_i}-L.jpg` : null,
+        progress_total: work.number_of_pages_median ?? null,
+        external_url: work.key ? `https://openlibrary.org${work.key}` : null,
+      } satisfies SearchResult;
+    }).filter((result: SearchResult) => !novelOnly || result.category === "novel");
+  }
+}
 
 const tmdbGenres: Record<string, string> = {
   action: "28", adventure: "12", animation: "16", comedy: "35", crime: "80",
@@ -18,12 +61,19 @@ const tmdbGenres: Record<string, string> = {
   thriller: "53", war: "10752", western: "37",
 };
 
-function tmdbResult(item: any, kind: "movie" | "tv"): SearchResult {
+function isCartoon(item: any) {
+  const countries: string[] = Array.isArray(item.origin_country) ? item.origin_country : [];
+  const animated = Array.isArray(item.genre_ids) && item.genre_ids.includes(16);
+  return animated && !countries.includes("JP") && item.original_language !== "ja";
+}
+
+function tmdbResult(item: any, kind: "movie" | "tv", category: "movie" | "tv" | "cartoon" = kind): SearchResult {
   return {
-    id: `tmdb:${kind}:${item.id}`, category: kind, title: item.title ?? item.name ?? "Untitled",
+    id: `tmdb:${kind}:${item.id}`, category, title: item.title ?? item.name ?? "Untitled",
     description: item.overview ?? "", year: (item.release_date ?? item.first_air_date ?? "").slice(0, 4),
     poster: item.poster_path ? `https://image.tmdb.org/t/p/w500${item.poster_path}` : null,
     progress_total: item.number_of_episodes ?? null,
+    season_count: item.number_of_seasons ?? null,
   };
 }
 
@@ -56,16 +106,19 @@ export async function GET(req: Request) {
   const params = new URL(req.url).searchParams;
   const q = params.get("q")?.trim();
   const type = params.get("type") ?? "all";
-  const validTypes = ["all", "movie", "tv", "anime", "manga", "manhwa"];
+  const validTypes = ["all", "movie", "tv", "cartoon", "anime", "manga", "manhwa", "book", "novel"];
   if (!q || q.length > 100) return NextResponse.json({ results: [], message: null });
   if (!validTypes.includes(type)) return NextResponse.json({ results: [], message: "Choose a valid category." }, { status: 400 });
 
   const tasks: Promise<SearchResult[]>[] = [];
+  if (["all", "book", "novel"].includes(type)) {
+    tasks.push(searchBooks(q, type as "all" | "book" | "novel").catch(() => []));
+  }
   const apiKey = process.env.TMDB_API_KEY;
   const genreId = tmdbGenres[q.toLowerCase()];
 
-  if (apiKey && ["all", "movie", "tv"].includes(type)) {
-    const kinds: Array<"movie" | "tv"> = type === "all" ? ["movie", "tv"] : [type as "movie" | "tv"];
+  if (apiKey && ["all", "movie", "tv", "cartoon"].includes(type)) {
+    const kinds: Array<"movie" | "tv"> = type === "all" ? ["movie", "tv"] : type === "cartoon" ? ["tv"] : [type as "movie" | "tv"];
     const bearerToken = apiKey.length > 50;
     for (const kind of kinds) {
       const endpoint = genreId
@@ -74,7 +127,10 @@ export async function GET(req: Request) {
       const url = `https://api.themoviedb.org/3/${endpoint}${bearerToken ? "" : `&api_key=${encodeURIComponent(apiKey)}`}`;
       tasks.push(fetch(url, { headers: bearerToken ? { Authorization: `Bearer ${apiKey}`, accept: "application/json" } : { accept: "application/json" }, next: { revalidate: 3600 } })
         .then(async response => { if (!response.ok) throw new Error(`TMDB returned ${response.status}`); return response.json(); })
-        .then(data => (data.results ?? []).slice(0, 12).map((item: any) => tmdbResult(item, kind)))
+        .then(data => (data.results ?? []).slice(0, 12).map((item: any) => {
+          const category = kind === "tv" && isCartoon(item) ? "cartoon" : kind;
+          return tmdbResult(item, kind, category);
+        }).filter((item: SearchResult) => type === "cartoon" ? item.category === "cartoon" : type !== "tv" || item.category === "tv"))
         .catch(() => []));
     }
   } else if (["all", "movie"].includes(type)) {
@@ -91,19 +147,20 @@ export async function GET(req: Request) {
     })().catch(() => []));
   }
 
-  if (!apiKey && ["all", "tv"].includes(type)) {
+  if (!apiKey && ["all", "tv", "cartoon"].includes(type)) {
     // TVMaze provides a no-key TV fallback before TMDB is configured.
     tasks.push(getJson(`https://api.tvmaze.com/search/shows?q=${encodeURIComponent(q)}`)
       .then(data => Promise.all(data.slice(0, 8).map(async ({ show }: any) => {
         let seasons: any[] = [];
         try { seasons = await getJson(`https://api.tvmaze.com/shows/${show.id}/seasons`); } catch { /* Keep search results even when season data is unavailable. */ }
         const episodeTotal = seasons.reduce((total, season) => total + (season.episodeOrder ?? 0), 0);
+        const cartoon = show.genres?.includes("Animation") && show.language !== "Japanese";
         return {
-          id: `tvmaze:${show.id}`, category: "tv" as const, title: show.name,
+          id: `tvmaze:${show.id}`, category: cartoon ? "cartoon" as const : "tv" as const, title: show.name,
           description: (show.summary ?? "").replace(/<[^>]*>/g, ""), year: (show.premiered ?? "").slice(0, 4),
           poster: show.image?.medium ?? null, progress_total: episodeTotal || null, season_count: seasons.length || null,
         };
-      }))).catch(() => []));
+      })).then((items: SearchResult[]) => items.filter(item => type === "cartoon" ? item.category === "cartoon" : type !== "tv" || item.category === "tv"))).catch(() => []));
   }
 
   if (["all", "anime", "manga", "manhwa"].includes(type)) {
@@ -150,4 +207,3 @@ export async function GET(req: Request) {
   const message = unique.length === 0 ? "No matches found. Try a title, creator, or another category." : null;
   return NextResponse.json({ results: unique, message });
 }
-
