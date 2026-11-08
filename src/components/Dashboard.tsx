@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowDownAZ, ArrowUpRight, BookOpen, Check, ChevronDown,
   Compass, Film, Heart, Layers3, LogOut, Minus, Plus, Search, Sparkles,
@@ -125,6 +125,7 @@ export default function Dashboard({ initialUser, view = "overview" }: { initialU
   const [category, setCategory] = useState("all");
   const [results, setResults] = useState<Result[]>([]);
   const [searchMessage, setSearchMessage] = useState("");
+  const searchCache = useRef(new Map<string, Result[]>());
   const [busy, setBusy] = useState(false);
   const [filter, setFilter] = useState("all");
   const [formatFilter, setFormatFilter] = useState("all");
@@ -142,23 +143,54 @@ export default function Dashboard({ initialUser, view = "overview" }: { initialU
     const term = query.trim();
     if (!term) { setResults([]); setSearchMessage(""); setBusy(false); return; }
     const controller = new AbortController();
-    setResults([]);
+    const cacheKey = `${category}:${term.toLowerCase()}`;
+    const cached = searchCache.current.get(cacheKey) ?? [];
+    setResults(cached);
     setSearchMessage("");
     setBusy(true);
     const timer = window.setTimeout(async () => {
+      const found = new Map(cached.map(item => [item.id, item]));
+      const publish = () => { if (!controller.signal.aborted) setResults([...found.values()]); };
       try {
-        const response = await fetch(`/api/search?q=${encodeURIComponent(term)}&type=${category}`, { signal: controller.signal, cache: "no-store" });
-        const data = await response.json();
-        if (!response.ok) throw new Error(data.message ?? "Search is unavailable right now.");
-        setResults(data.results ?? []);
-        setSearchMessage(data.message ?? "");
+        const response = await fetch(`/api/search?q=${encodeURIComponent(term)}&type=${category}&stream=1`, { signal: controller.signal, cache: "no-store" });
+        if (!response.ok) {
+          const data = await response.json();
+          throw new Error(data.message ?? "Search is unavailable right now.");
+        }
+        if (!response.body) throw new Error("Streaming search is unavailable in this browser.");
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        const readBatch = (line: string) => {
+          if (!line.trim()) return;
+          const batch = JSON.parse(line) as { results?: Result[] };
+          for (const item of batch.results ?? []) found.set(item.id, item);
+          publish();
+        };
+        while (true) {
+          const { done, value } = await reader.read();
+          buffer += decoder.decode(value ?? new Uint8Array(), { stream: !done });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() ?? "";
+          lines.forEach(readBatch);
+          if (done) break;
+        }
+        if (buffer.trim()) readBatch(buffer);
+        const finalResults = [...found.values()];
+        setResults(finalResults);
+        setSearchMessage(finalResults.length ? "" : "No matches found. Try a title, creator, or another category.");
+        searchCache.current.set(cacheKey, finalResults);
+        if (searchCache.current.size > 40) {
+          const oldest = searchCache.current.keys().next().value;
+          if (oldest) searchCache.current.delete(oldest);
+        }
       } catch (error) {
         if (!controller.signal.aborted) {
-          setResults([]);
+          if (cached.length === 0) setResults([]);
           setSearchMessage(error instanceof Error ? error.message : "Search is unavailable right now.");
         }
       } finally { if (!controller.signal.aborted) setBusy(false); }
-    }, 160);
+    }, 120);
     return () => { window.clearTimeout(timer); controller.abort(); };
   }, [query, category]);
 
@@ -340,8 +372,8 @@ export default function Dashboard({ initialUser, view = "overview" }: { initialU
         </div>
         <div className="discover-formats">{categories.map(value => <button key={value} className={category === value ? "selected" : ""} onClick={() => setCategory(value)}>{value === "all" ? <Layers3 size={14} /> : (() => { const Icon = formatIcon[value]; return <Icon size={14} />; })()}{value === "all" ? "All" : formatLabel(value)}</button>)}</div>
         {!query.trim() ? <div className="discover-welcome"><div className="welcome-orbit orbit-one" /><div className="welcome-orbit orbit-two" /><div className="welcome-symbol"><Search size={24} /></div><span className="eyebrow">A WORLD OF STORIES</span><h2>What are you in the mood for?</h2><p>Start typing to search across your favorite kinds of stories.</p><div className="welcome-chips">{["Harry Potter", "romance", "One Piece", "Dune"].map(term => <button key={term} onClick={() => setQuery(term)}>{term}<ArrowUpRight size={13} /></button>)}</div></div> : <>
-          <div className="results-heading"><div><span className="eyebrow">SEARCH RESULTS</span><h2>{busy ? "Finding your next story…" : searchMessage ? "No matches this time" : `${results.length} ${results.length === 1 ? "story" : "stories"} found`}</h2></div>{query && <span className="query-chip"><Search size={13} />{query}</span>}</div>
-          {busy ? <div className="discover-grid">{Array.from({ length: 8 }, (_, index) => <div className="skeleton-result" key={index}><div /><span /><i /></div>)}</div> : results.length ? <div className="discover-grid">{results.map(item => <article className="discover-card" key={`${item.category}-${item.id}`}><div className="discover-card-art"><Poster src={item.poster} title={item.title} category={item.category} /><span className="format-pill">{formatLabel(item.category)}</span></div><div className="discover-card-body"><h3 title={item.title}>{item.title}</h3>{item.author && <div className="result-author">{item.author}</div>}<div className="result-meta">{item.year || "Year unknown"}{item.season_count ? ` · ${item.season_count} seasons` : ""}{item.progress_total ? ` · ${item.progress_total} ${item.category === "movie" ? "min" : progressUnit(item.category)}` : ""}</div>{item.description && <p>{item.description}</p>}<button onClick={() => void add(item)} disabled={addingId === item.id}><Plus size={15} />{addingId === item.id ? "Adding…" : "Add to collection"}</button></div></article>)}</div> : <div className="no-results"><div className="empty-state-icon"><Search size={20} /></div><strong>{searchMessage || "No matches found"}</strong><p>Try a shorter title or choose another format.</p></div>}
+          <div className="results-heading"><div><span className="eyebrow">SEARCH RESULTS</span><h2>{busy ? results.length ? "More stories loading…" : "Finding your next story…" : searchMessage && results.length === 0 ? "No matches this time" : `${results.length} ${results.length === 1 ? "story" : "stories"} found`}</h2></div>{query && <span className="query-chip"><Search size={13} />{query}</span>}</div>
+          {busy && results.length === 0 ? <div className="discover-grid">{Array.from({ length: 8 }, (_, index) => <div className="skeleton-result" key={index}><div /><span /><i /></div>)}</div> : results.length ? <div className="discover-grid">{results.map(item => <article className="discover-card" key={`${item.category}-${item.id}`}><div className="discover-card-art"><Poster src={item.poster} title={item.title} category={item.category} /><span className="format-pill">{formatLabel(item.category)}</span></div><div className="discover-card-body"><h3 title={item.title}>{item.title}</h3>{item.author && <div className="result-author">{item.author}</div>}<div className="result-meta">{item.year || "Year unknown"}{item.season_count ? ` · ${item.season_count} seasons` : ""}{item.progress_total ? ` · ${item.progress_total} ${item.category === "movie" ? "min" : progressUnit(item.category)}` : ""}</div>{item.description && <p>{item.description}</p>}<button onClick={() => void add(item)} disabled={addingId === item.id}><Plus size={15} />{addingId === item.id ? "Adding…" : "Add to collection"}</button></div></article>)}</div> : <div className="no-results"><div className="empty-state-icon"><Search size={20} /></div><strong>{searchMessage || "No matches found"}</strong><p>Try a shorter title or choose another format.</p></div>}
         </>}
       </section>}
 
