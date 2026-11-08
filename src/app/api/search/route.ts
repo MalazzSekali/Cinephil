@@ -125,13 +125,37 @@ export async function GET(req: Request) {
         ? `discover/${kind}?with_genres=${genreId}&sort_by=popularity.desc&include_adult=false`
         : `search/${kind}?query=${encodeURIComponent(q)}&include_adult=false`;
       const url = `https://api.themoviedb.org/3/${endpoint}${bearerToken ? "" : `&api_key=${encodeURIComponent(apiKey)}`}`;
-      tasks.push(fetch(url, { headers: bearerToken ? { Authorization: `Bearer ${apiKey}`, accept: "application/json" } : { accept: "application/json" }, next: { revalidate: 3600 } })
+      const headers = bearerToken ? { Authorization: `Bearer ${apiKey}`, accept: "application/json" } : { accept: "application/json" };
+      const searchTask = fetch(url, { headers, next: { revalidate: 3600 } })
         .then(async response => { if (!response.ok) throw new Error(`TMDB returned ${response.status}`); return response.json(); })
         .then(data => (data.results ?? []).slice(0, 12).map((item: any) => {
           const category = kind === "tv" && isCartoon(item) ? "cartoon" : kind;
           return tmdbResult(item, kind, category);
         }).filter((item: SearchResult) => type === "cartoon" ? item.category === "cartoon" : type !== "tv" || item.category === "tv"))
-        .catch(() => []));
+        .catch(() => [] as SearchResult[]);
+      tasks.push(searchTask);
+
+      // Search responses omit season and episode totals. Enrich TV results in
+      // a separate streamed batch so the first cards still appear immediately.
+      if (kind === "tv") {
+        tasks.push(searchTask.then(results => Promise.all(results.map(async item => {
+          const mediaId = item.id.match(/^tmdb:tv:(\d+)$/)?.[1];
+          if (!mediaId) return null;
+          try {
+            const detailUrl = `https://api.themoviedb.org/3/tv/${mediaId}${bearerToken ? "" : `?api_key=${encodeURIComponent(apiKey)}`}`;
+            const response = await fetch(detailUrl, { headers, next: { revalidate: 3600 } });
+            if (!response.ok) return null;
+            const details = await response.json();
+            return {
+              ...item,
+              season_count: details.number_of_seasons ?? item.season_count ?? null,
+              progress_total: details.number_of_episodes ?? item.progress_total ?? null,
+            } satisfies SearchResult;
+          } catch {
+            return null;
+          }
+        }))).then(enriched => enriched.filter((item): item is SearchResult => item !== null)));
+      }
     }
   } else if (["all", "movie"].includes(type)) {
     // Wikipedia's public search provides a useful film fallback without requiring an API key.
